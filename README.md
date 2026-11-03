@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/platform-macOS%2015%2B%20(Apple%20Silicon)-blue" alt="macOS 15+ Apple Silicon" />
 </p>
 
-GrokBar shows your Grok plan limits in the menu bar. The menu-bar item shows the highest usage percentage. The dropdown lists each limit the Grok CLI returns, with a progress bar, the reset time in your timezone, and whether you're ahead of a steady pace through the window. When the CLI reports a prepaid balance, that amount is shown in dollars under the limits.
+GrokBar shows your Grok plan limits in the menu bar. The menu-bar item shows the highest usage percentage. The dropdown lists each limit the Grok CLI returns, with a progress bar, the reset time in your timezone, and whether you're ahead of a steady pace through the window.
 
 Turn on local telemetry to keep a history of those limits and of token totals from Grok sessions on this Mac. [Bar UI](https://github.com/GordonBeeming/bar-ui) reads that history.
 
