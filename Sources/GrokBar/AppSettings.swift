@@ -1,0 +1,249 @@
+import GrokBarCore
+import Foundation
+import Observation
+import OSLog
+
+enum MenuBarPercentageSelection: Hashable {
+    case highest
+    case limit(String)
+
+    private static let highestRawValue = "highest"
+
+    init(rawValue: String?) {
+        guard let rawValue, rawValue != Self.highestRawValue else {
+            self = .highest
+            return
+        }
+        self = .limit(rawValue)
+    }
+
+    var rawValue: String {
+        switch self {
+        case .highest:
+            Self.highestRawValue
+        case let .limit(id):
+            id
+        }
+    }
+
+    var limitID: String? {
+        switch self {
+        case .highest:
+            nil
+        case let .limit(id):
+            id
+        }
+    }
+}
+
+@MainActor
+@Observable
+final class AppSettings {
+    private enum Keys {
+        static let useDefaultSeverity = "useDefaultSeverity"
+        static let warningThresholdPercent = "warningThresholdPercent"
+        static let criticalThresholdPercent = "criticalThresholdPercent"
+        static let menuBarPercentageSelection = "menuBarPercentageSelection"
+        static let fuelTankMode = "fuelTankMode"
+        static let showMenuBarFlame = "showMenuBarFlame"
+        static let celebrationsEnabled = "celebrationsEnabled"
+        static let telemetryEnabled = "telemetryEnabled"
+        static let telemetryIntervalMinutes = "telemetryIntervalMinutes"
+        static let telemetryRetentionDays = "telemetryRetentionDays"
+        static let telemetryDirectory = "telemetryDirectory"
+        static let telemetryFolderMigrated = "telemetryFolderMigrated"
+
+        static func celebrationEnabled(_ trigger: CelebrationTrigger) -> String {
+            "celebration.\(trigger.rawValue).enabled"
+        }
+
+        static func celebrationReaction(_ trigger: CelebrationTrigger) -> String {
+            "celebration.\(trigger.rawValue).reaction"
+        }
+    }
+
+    private let defaults: UserDefaults
+    private let home: URL
+    private let usesDefaultTelemetryDirectory: Bool
+    private let logger = Logger(subsystem: "com.gordonbeeming.GrokBar", category: "Telemetry")
+    private var storedTelemetryIntervalMinutes: Int
+    private var storedTelemetryRetentionDays: Int
+
+    var telemetryEnabled: Bool {
+        didSet { defaults.set(telemetryEnabled, forKey: Keys.telemetryEnabled) }
+    }
+
+    var telemetryIntervalMinutes: Int {
+        get { storedTelemetryIntervalMinutes }
+        set {
+            storedTelemetryIntervalMinutes = min(max(newValue, 1), 1_440)
+            defaults.set(storedTelemetryIntervalMinutes, forKey: Keys.telemetryIntervalMinutes)
+        }
+    }
+
+    var telemetryRetentionDays: Int {
+        get { storedTelemetryRetentionDays }
+        set {
+            storedTelemetryRetentionDays = TelemetryConfiguration.normalizedRetentionDays(newValue)
+            defaults.set(storedTelemetryRetentionDays, forKey: Keys.telemetryRetentionDays)
+        }
+    }
+
+    var telemetryDirectory: String {
+        didSet { defaults.set(telemetryDirectory, forKey: Keys.telemetryDirectory) }
+    }
+
+    var telemetryConfiguration: TelemetryConfiguration {
+        TelemetryConfiguration(
+            enabled: telemetryEnabled, intervalMinutes: telemetryIntervalMinutes,
+            retentionDays: telemetryRetentionDays, directory: URL(fileURLWithPath: telemetryDirectory, isDirectory: true)
+        )
+    }
+
+    var useDefaultSeverity: Bool {
+        didSet { defaults.set(useDefaultSeverity, forKey: Keys.useDefaultSeverity) }
+    }
+
+    var showMenuBarFlame: Bool {
+        didSet { defaults.set(showMenuBarFlame, forKey: Keys.showMenuBarFlame) }
+    }
+
+    var menuBarPercentageSelection: MenuBarPercentageSelection {
+        didSet {
+            defaults.set(menuBarPercentageSelection.rawValue, forKey: Keys.menuBarPercentageSelection)
+        }
+    }
+
+    /// Off by default (percentages count up as usage). On flips every percentage and
+    /// progress bar into "fuel remaining" that drains from full to empty.
+    var fuelTankMode: Bool {
+        didSet { defaults.set(fuelTankMode, forKey: Keys.fuelTankMode) }
+    }
+
+    /// The display direction the rest of the app renders with, derived from `fuelTankMode`.
+    var usageDisplayMode: UsageDisplayMode {
+        fuelTankMode ? .fuelTank : .used
+    }
+
+    var celebrationsEnabled: Bool {
+        didSet { defaults.set(celebrationsEnabled, forKey: Keys.celebrationsEnabled) }
+    }
+
+    private var celebrationEnabledStore: [String: Bool]
+    private var celebrationReactionStore: [String: ReactionChoice]
+
+    func celebrationEnabled(for trigger: CelebrationTrigger) -> Bool {
+        celebrationEnabledStore[trigger.rawValue] ?? true
+    }
+
+    func setCelebrationEnabled(_ enabled: Bool, for trigger: CelebrationTrigger) {
+        celebrationEnabledStore[trigger.rawValue] = enabled
+        defaults.set(enabled, forKey: Keys.celebrationEnabled(trigger))
+    }
+
+    func reaction(for trigger: CelebrationTrigger) -> ReactionChoice {
+        celebrationReactionStore[trigger.rawValue] ?? trigger.defaultReaction
+    }
+
+    func setReaction(_ reaction: ReactionChoice, for trigger: CelebrationTrigger) {
+        celebrationReactionStore[trigger.rawValue] = reaction
+        defaults.set(reaction.rawValue, forKey: Keys.celebrationReaction(trigger))
+    }
+
+    private var storedWarningThresholdPercent: Double
+    var warningThresholdPercent: Double {
+        get { storedWarningThresholdPercent }
+        set {
+            storedWarningThresholdPercent = Self.clamp(newValue)
+            defaults.set(storedWarningThresholdPercent, forKey: Keys.warningThresholdPercent)
+        }
+    }
+
+    private var storedCriticalThresholdPercent: Double
+    var criticalThresholdPercent: Double {
+        get { storedCriticalThresholdPercent }
+        set {
+            storedCriticalThresholdPercent = Self.clamp(newValue)
+            defaults.set(storedCriticalThresholdPercent, forKey: Keys.criticalThresholdPercent)
+        }
+    }
+
+    var thresholds: SeverityThresholds {
+        SeverityThresholds(
+            useDefaults: useDefaultSeverity,
+            warningPercent: warningThresholdPercent,
+            criticalPercent: criticalThresholdPercent
+        )
+    }
+
+    /// Moves files out of the old Documents default. Call once at launch, before telemetry starts writing.
+    func migrateLegacyTelemetryFolder() {
+        // The flag keeps later launches from touching Documents at all, even when the old folder stays because it
+        // holds files that aren't ours.
+        guard usesDefaultTelemetryDirectory, !defaults.bool(forKey: Keys.telemetryFolderMigrated) else { return }
+        let migration = TelemetryFolderMigration(home: home)
+        for warning in migration.run() {
+            logger.error("Telemetry folder migration: \(warning, privacy: .public)")
+        }
+        if !migration.hasPendingFiles() { defaults.set(true, forKey: Keys.telemetryFolderMigrated) }
+    }
+
+    init(defaults: UserDefaults = .standard, home: URL = FileManager.default.homeDirectoryForCurrentUser) {
+        self.defaults = defaults
+        self.home = home
+        // Read before anything registers a default: only a stored value means the user chose a folder, and a stored
+        // copy of the old default means they picked "Use default" while it pointed at Documents.
+        let storedDirectory = defaults.string(forKey: Keys.telemetryDirectory).flatMap { $0.hasPrefix("/") ? $0 : nil }
+        let legacyPath = TelemetryConfiguration.legacyDefaultDirectory(home: home).standardizedFileURL.path
+        let storedIsLegacy = storedDirectory.map { URL(fileURLWithPath: $0).standardizedFileURL.path == legacyPath } ?? false
+        usesDefaultTelemetryDirectory = storedDirectory == nil || storedIsLegacy
+        if storedIsLegacy { defaults.removeObject(forKey: Keys.telemetryDirectory) }
+        var registrations: [String: Any] = [
+            Keys.useDefaultSeverity: true,
+            Keys.warningThresholdPercent: 75.0,
+            Keys.criticalThresholdPercent: 90.0,
+            Keys.menuBarPercentageSelection: MenuBarPercentageSelection.highest.rawValue,
+            Keys.fuelTankMode: false,
+            Keys.showMenuBarFlame: true,
+            Keys.celebrationsEnabled: false,
+            Keys.telemetryEnabled: false,
+            Keys.telemetryIntervalMinutes: 5,
+            Keys.telemetryRetentionDays: 90
+        ]
+        for trigger in CelebrationTrigger.allCases {
+            registrations[Keys.celebrationEnabled(trigger)] = true
+            registrations[Keys.celebrationReaction(trigger)] = trigger.defaultReaction.rawValue
+        }
+        defaults.register(defaults: registrations)
+
+        useDefaultSeverity = defaults.bool(forKey: Keys.useDefaultSeverity)
+        telemetryEnabled = defaults.bool(forKey: Keys.telemetryEnabled)
+        storedTelemetryIntervalMinutes = min(max(defaults.integer(forKey: Keys.telemetryIntervalMinutes), 1), 1_440)
+        storedTelemetryRetentionDays = TelemetryConfiguration.normalizedRetentionDays(defaults.integer(forKey: Keys.telemetryRetentionDays))
+        telemetryDirectory = (storedIsLegacy ? nil : storedDirectory)
+            ?? TelemetryConfiguration.defaultDirectory(home: home).path
+        menuBarPercentageSelection = MenuBarPercentageSelection(
+            rawValue: defaults.string(forKey: Keys.menuBarPercentageSelection)
+        )
+        fuelTankMode = defaults.bool(forKey: Keys.fuelTankMode)
+        showMenuBarFlame = defaults.bool(forKey: Keys.showMenuBarFlame)
+        celebrationsEnabled = defaults.bool(forKey: Keys.celebrationsEnabled)
+
+        var enabledStore: [String: Bool] = [:]
+        var reactionStore: [String: ReactionChoice] = [:]
+        for trigger in CelebrationTrigger.allCases {
+            enabledStore[trigger.rawValue] = defaults.bool(forKey: Keys.celebrationEnabled(trigger))
+            let rawReaction = defaults.string(forKey: Keys.celebrationReaction(trigger))
+            reactionStore[trigger.rawValue] = rawReaction.flatMap(ReactionChoice.init(rawValue:))
+                ?? trigger.defaultReaction
+        }
+        celebrationEnabledStore = enabledStore
+        celebrationReactionStore = reactionStore
+        storedWarningThresholdPercent = Self.clamp(defaults.double(forKey: Keys.warningThresholdPercent))
+        storedCriticalThresholdPercent = Self.clamp(defaults.double(forKey: Keys.criticalThresholdPercent))
+    }
+
+    private static func clamp(_ value: Double) -> Double {
+        min(max(value, 1), 100)
+    }
+}
