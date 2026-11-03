@@ -14,7 +14,7 @@ Contributor and maintainer details that don't belong in the README.
 make test
 ```
 
-That runs `swift build --build-tests`, then `xcrun xctest` on `GrokBarCoreTests.xctest`. On the Swift 6.4 toolchain, `swift test` only runs Swift Testing and reports zero tests even when the XCTest bundle built, so the Makefile and CI don't use it.
+That runs `swift build --build-tests`, then `xcrun xctest` on the bundle it produced. Swift 6.4 names it `GrokBarCoreTests.xctest`. Swift 6.1 names it `GrokBarPackageTests.xctest`. On the Swift 6.4 toolchain, `swift test` only runs Swift Testing and reports zero tests even when the XCTest bundle built, so the Makefile and CI don't use it.
 
 A release binary, without packaging:
 

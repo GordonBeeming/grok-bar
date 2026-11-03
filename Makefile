@@ -17,7 +17,9 @@ build:
 
 test:
 	swift build --build-tests
-	xcrun xctest "$$(find .build -name GrokBarCoreTests.xctest -type d | head -1)"
+	bundle="$$(find .build \( -name GrokBarCoreTests.xctest -o -name GrokBarPackageTests.xctest \) -type d | head -1)"; \
+	test -n "$$bundle" || { echo "No XCTest bundle under .build" >&2; exit 1; }; \
+	xcrun xctest "$$bundle"
 
 bundle: build
 	rm -rf $(APP_BUNDLE)
