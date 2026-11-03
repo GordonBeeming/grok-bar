@@ -101,12 +101,14 @@ public struct SessionUsageScanner: Sendable {
                 continue
             }
             let previous = state.cursors[url.path] ?? [:]
+            var stored = previous
             for model in Set(current.keys).union(previous.keys).sorted() {
                 guard let next = current[model] else { continue }
                 let delta = Self.delta(from: previous[model], to: next)
                 try Self.add(delta, model: model, to: &state.totals)
+                stored[model] = Self.highWater(from: previous[model], to: next)
             }
-            state.cursors[url.path] = current
+            state.cursors[url.path] = stored
         }
         return failures
     }
@@ -139,6 +141,19 @@ public struct SessionUsageScanner: Sendable {
         }
         if let enumerationError { throw enumerationError }
         return files.sorted { $0.path < $1.path }
+    }
+
+    /// Keeps a field that dipped while the total did not, so the dip is not counted again when the field returns.
+    static func highWater(from previous: SessionScanState.RawTotals?, to next: SessionScanState.RawTotals) -> SessionScanState.RawTotals {
+        guard let previous, next.total >= previous.total else { return next }
+        return SessionScanState.RawTotals(
+            input: max(previous.input, next.input),
+            cacheRead: max(previous.cacheRead, next.cacheRead),
+            cacheWrite: max(previous.cacheWrite, next.cacheWrite),
+            output: max(previous.output, next.output),
+            reasoning: max(previous.reasoning, next.reasoning),
+            total: max(previous.total, next.total)
+        )
     }
 
     static func delta(from previous: SessionScanState.RawTotals?, to next: SessionScanState.RawTotals) -> SessionScanState.RawTotals {

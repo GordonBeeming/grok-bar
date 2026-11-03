@@ -64,6 +64,23 @@ final class SessionUsageScannerTests: XCTestCase {
         XCTAssertThrowsError(try scanner.baseline(now: Date()))
     }
 
+    func testFieldDipIsNotCountedAgainWhenItReturns() throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: "grokbar-sessions-\(UUID())", directoryHint: .isDirectory)
+        let session = home.appending(path: "sessions/one/session", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+        let file = session.appending(path: "usage.json")
+        let scanner = SessionUsageScanner(grokHome: home)
+        try write(file, input: 100, output: 100, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 200)
+        var state = try scanner.baseline(now: Date())
+        try write(file, input: 90, output: 120, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 210)
+        _ = try scanner.scan(&state)
+        try write(file, input: 100, output: 120, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 220)
+        _ = try scanner.scan(&state)
+        let counts = try XCTUnwrap(state.totals["grok-4.7"])
+        XCTAssertEqual(counts.input, 0)
+        XCTAssertEqual(counts.output, 20)
+    }
+
     func testNewFileAfterBaselineIsCounted() throws {
         let home = FileManager.default.temporaryDirectory.appending(path: "grokbar-sessions-\(UUID())", directoryHint: .isDirectory)
         let scanner = SessionUsageScanner(grokHome: home)

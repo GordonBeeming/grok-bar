@@ -282,6 +282,26 @@ final class TelemetryFolderMigrationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacy.path))
     }
 
+    func testUnrelatedMergeMarkDirectoryIsLeftAlone() throws {
+        let folder = legacy.appending(path: "notes.merge-mark", directoryHint: .isDirectory)
+        try write("keep.txt", "mine", in: folder)
+
+        XCTAssertEqual(TelemetryFolderMigration(home: home).run(), [])
+
+        XCTAssertEqual(try read("keep.txt", in: folder), "mine")
+    }
+
+    func testRecordsAddedAfterAnInterruptedAppendAreKept() throws {
+        let name = "grokbar-metrics-2026-10-11.jsonl"
+        try write(name, "new\nKEEP\n", in: destination)
+        try write("\(name).merging", "old\n", in: legacy)
+        try Data("4 4\n".utf8).write(to: legacy.appending(path: "\(name).merge-mark"))
+
+        XCTAssertEqual(TelemetryFolderMigration(home: home).run(), [])
+
+        XCTAssertEqual(try read(name, in: destination), "new\nKEEP\nold\n")
+    }
+
     func testPermissionErrorOnTheLegacyFolderStaysPending() throws {
         try write("grokbar-metrics-2026-10-11.jsonl", "m\n", in: legacy)
         let migration = TelemetryFolderMigration(home: home, fileManager: LegacyAttributesDeniedFileManager())

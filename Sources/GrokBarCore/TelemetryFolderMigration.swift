@@ -34,7 +34,12 @@ public struct TelemetryFolderMigration {
         var warnings: [String] = []
         for entry in entries {
             if entry.pathExtension == Self.markExtension {
-                let merging = entry.deletingPathExtension().appendingPathExtension(Self.mergingExtension)
+                let base = entry.deletingPathExtension()
+                // Only a regular marker for one of our daily files. A directory named like a marker is someone else's.
+                guard Self.isTelemetryFile(base),
+                      let values = try? entry.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+                      values.isRegularFile == true, values.isSymbolicLink != true else { continue }
+                let merging = base.appendingPathExtension(Self.mergingExtension)
                 if !fileManager.fileExists(atPath: merging.path) {
                     try? fileManager.removeItem(at: entry)
                 }
@@ -175,18 +180,47 @@ public struct TelemetryFolderMigration {
             try finishMerge(merging: merging, mark: mark)
             return
         }
+        try append(payload, at: offset, handle: handle, mark: mark)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+        try finishMerge(merging: merging, mark: mark)
+    }
+
+    /// Writes the payload at `offset` only when nothing has been added past an unfinished copy of it.
+    /// Captures written after that interrupted append stay where they are, and the payload goes on the end.
+    private func append(_ payload: Data, at offset: UInt64, handle: FileHandle, mark: URL) throws {
         let end = try handle.seekToEnd()
-        if end != offset { try handle.truncate(atOffset: offset) }
+        let prefixOnly = try unfinishedPrefixOnly(payload, at: offset, end: end, handle: handle)
+        if end == offset || prefixOnly {
+            if end != offset { try handle.truncate(atOffset: offset) }
+            do {
+                try handle.seek(toOffset: offset)
+                try handle.write(contentsOf: payload)
+                try handle.synchronize()
+            } catch {
+                try? handle.truncate(atOffset: offset)
+                throw error
+            }
+            return
+        }
+        let fresh = try handle.seekToEnd()
+        try Data("\(fresh) \(payload.count)\n".utf8).write(to: mark, options: .atomic)
+        try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: mark.path)
         do {
-            try handle.seek(toOffset: offset)
+            try handle.seek(toOffset: fresh)
             try handle.write(contentsOf: payload)
             try handle.synchronize()
         } catch {
-            try? handle.truncate(atOffset: offset)
+            try? handle.truncate(atOffset: fresh)
             throw error
         }
-        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
-        try finishMerge(merging: merging, mark: mark)
+    }
+
+    private func unfinishedPrefixOnly(_ payload: Data, at offset: UInt64, end: UInt64, handle: FileHandle) throws -> Bool {
+        guard end > offset, end < offset + UInt64(payload.count) else { return false }
+        let overlap = Int(end - offset)
+        try handle.seek(toOffset: offset)
+        let present = try handle.read(upToCount: overlap) ?? Data()
+        return present == payload.prefix(overlap)
     }
 
     /// The mark is written before the append. A later run with the same length trusts that offset.
