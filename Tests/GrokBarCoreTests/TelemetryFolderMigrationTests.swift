@@ -7,6 +7,16 @@ private final class UndeletableFileManager: FileManager, @unchecked Sendable {
     }
 }
 
+private final class LegacyAttributesDeniedFileManager: FileManager, @unchecked Sendable {
+    override func destinationOfSymbolicLink(atPath path: String) throws -> String {
+        throw CocoaError(.fileReadNoPermission, userInfo: [NSFilePathErrorKey: path])
+    }
+
+    override func attributesOfItem(atPath path: String) throws -> [FileAttributeKey: Any] {
+        throw CocoaError(.fileReadNoPermission, userInfo: [NSFilePathErrorKey: path])
+    }
+}
+
 private final class UnreadableFileManager: FileManager, @unchecked Sendable {
     override func contentsOfDirectory(
         at url: URL, includingPropertiesForKeys keys: [URLResourceKey]?, options mask: FileManager.DirectoryEnumerationOptions = []
@@ -69,6 +79,10 @@ final class TelemetryFolderMigrationTests: XCTestCase {
 
         let attributes = try FileManager.default.attributesOfItem(atPath: destination.path)
         XCTAssertEqual(attributes[.posixPermissions] as? Int, 0o700)
+        let file = try FileManager.default.attributesOfItem(
+            atPath: destination.appending(path: "grokbar-metrics-2026-10-11.jsonl").path
+        )
+        XCTAssertEqual((file[.posixPermissions] as? Int).map { $0 & 0o777 }, 0o600)
     }
 
     func testLeavesOtherFilesAndKeepsFolderWhenNotEmpty() throws {
@@ -254,6 +268,27 @@ final class TelemetryFolderMigrationTests: XCTestCase {
 
         XCTAssertEqual(try read(name, in: destination), "new\n")
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacy.path))
+    }
+
+    func testAlreadyAppendedMergingFileIsNotAppendedAgain() throws {
+        let name = "grokbar-metrics-2026-10-11.jsonl"
+        try write(name, "new\nold\n", in: destination)
+        try write("\(name).merging", "old\n", in: legacy)
+        try Data("4 4\n".utf8).write(to: legacy.appending(path: "\(name).merge-mark"))
+
+        XCTAssertEqual(TelemetryFolderMigration(home: home).run(), [])
+
+        XCTAssertEqual(try read(name, in: destination), "new\nold\n")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacy.path))
+    }
+
+    func testPermissionErrorOnTheLegacyFolderStaysPending() throws {
+        try write("grokbar-metrics-2026-10-11.jsonl", "m\n", in: legacy)
+        let migration = TelemetryFolderMigration(home: home, fileManager: LegacyAttributesDeniedFileManager())
+
+        XCTAssertEqual(migration.run().count, 1)
+        XCTAssertTrue(migration.hasPendingFiles())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
     }
 
     func testUnreadableLegacyFolderCountsAsPendingSoItIsRetried() throws {

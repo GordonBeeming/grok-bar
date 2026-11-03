@@ -78,6 +78,27 @@ final class BillingTests: XCTestCase {
         XCTAssertEqual(UsageLimitMapper.prepaidUSD(from: response), 0)
     }
 
+    func testCalendarMonthsShareOneCreditID() throws {
+        func month(_ start: String, _ end: String) throws -> UsageLimit {
+            let response = try decode("""
+            {
+              "config": {
+                "creditUsagePercent": 10,
+                "currentPeriod": {"type": "USAGE_PERIOD_TYPE_MONTHLY", "start": "\(start)", "end": "\(end)"}
+              }
+            }
+            """)
+            return try XCTUnwrap(UsageLimitMapper.limits(from: response).first)
+        }
+        let june = try month("2026-06-01T00:00:00Z", "2026-07-01T00:00:00Z")
+        let july = try month("2026-07-01T00:00:00Z", "2026-08-01T00:00:00Z")
+        XCTAssertEqual(june.id, "credits:monthly")
+        XCTAssertEqual(july.id, june.id)
+        XCTAssertEqual(june.windowDurationMinutes, 30 * 24 * 60)
+        XCTAssertEqual(july.windowDurationMinutes, 31 * 24 * 60)
+        XCTAssertEqual(june.group, "monthly")
+    }
+
     func testPercentClampsAndSkipsProductWithoutPercent() throws {
         let response = try decode("""
         {

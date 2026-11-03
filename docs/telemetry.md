@@ -38,8 +38,9 @@ Attributes are `limit.id`, `limit.name`, and `limit.window.duration_minutes` whe
 
 | `limit.id` | When |
 | --- | --- |
-| `credits:<minutes>` | Credit usage percent, and the period has a length |
-| `credits:weekly` or `credits:monthly` | Percent is present, length isn't, period type is |
+| `credits:monthly` | Credit usage percent for a month. That is a period of 20 to 45 days, or a monthly type with no length. The exact length stays in `limit.window.duration_minutes`, because a calendar month is not a fixed number of minutes |
+| `credits:<minutes>` | Credit usage percent, and the period has a length outside that month range |
+| `credits:weekly` | Percent is present, length isn't, and the type says weekly |
 | `credits` | Percent is present and nothing else identifies the window |
 | `credits:legacy` | No percent, and `monthlyLimit` is above zero. The percent is `used / monthlyLimit` |
 | `on_demand` | `onDemandCap` is above zero. The percent is `onDemandUsed / onDemandCap` |

@@ -12,7 +12,16 @@ public struct TelemetryFolderMigration {
 
     /// Returns a message per failure. A failure never throws: capture must still write to the new default.
     public func run() -> [String] {
-        guard let legacy = legacyFolder() else { return [] }
+        switch inspectLegacy() {
+        case .absent: return []
+        case let .unreadable(message):
+            return ["Couldn't read the old telemetry folder: \(message)"]
+        case let .folder(legacy):
+            return moveLegacyFolder(legacy)
+        }
+    }
+
+    private func moveLegacyFolder(_ legacy: URL) -> [String] {
 
         let entries: [URL]
         do {
@@ -24,6 +33,13 @@ public struct TelemetryFolderMigration {
         let destination = TelemetryConfiguration.defaultDirectory(home: home)
         var warnings: [String] = []
         for entry in entries {
+            if entry.pathExtension == Self.markExtension {
+                let merging = entry.deletingPathExtension().appendingPathExtension(Self.mergingExtension)
+                if !fileManager.fileExists(atPath: merging.path) {
+                    try? fileManager.removeItem(at: entry)
+                }
+                continue
+            }
             guard let stage = Self.stage(of: entry) else { continue }
             do {
                 let values = try entry.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
@@ -32,6 +48,7 @@ public struct TelemetryFolderMigration {
                     if stage != .live { warnings.append("Left \(entry.lastPathComponent) alone in the old telemetry folder: it isn't a regular file") }
                     continue
                 }
+                try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: entry.path)
                 if stage == .migrated || stage == .mergingDone {
                     try fileManager.removeItem(at: entry)
                     continue
@@ -43,6 +60,7 @@ public struct TelemetryFolderMigration {
                     try merge(entry, into: target)
                 } else {
                     try fileManager.moveItem(at: entry, to: target)
+                    try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
                 }
             } catch {
                 warnings.append("Couldn't move \(entry.lastPathComponent) out of the old telemetry folder: \(error.localizedDescription)")
@@ -55,7 +73,15 @@ public struct TelemetryFolderMigration {
     /// True while a file the migration would still move or finish merging is in the old folder, which means a previous
     /// attempt failed. A `.migrated` leftover is already merged and only needs deleting, so it doesn't count.
     public func hasPendingFiles() -> Bool {
-        guard let legacy = legacyFolder() else { return false }
+        switch inspectLegacy() {
+        case .absent: return false
+        case .unreadable: return true
+        case let .folder(legacy):
+            return folderHasPendingFiles(legacy)
+        }
+    }
+
+    private func folderHasPendingFiles(_ legacy: URL) -> Bool {
         let entries: [URL]
         do {
             entries = try fileManager.contentsOfDirectory(
@@ -72,19 +98,49 @@ public struct TelemetryFolderMigration {
         }
     }
 
-    /// The old folder, unless it's missing or a symbolic link: a link could point anywhere, and its target isn't ours to move out of.
-    private func legacyFolder() -> URL? {
+    private enum LegacyFolder {
+        case absent
+        case folder(URL)
+        case unreadable(String)
+    }
+
+    /// A symbolic link is absent: its target isn't ours to move. A permission error is unreadable, not missing,
+    /// so the caller keeps retrying instead of recording the migration as finished.
+    private func inspectLegacy() -> LegacyFolder {
         let legacy = TelemetryConfiguration.legacyDefaultDirectory(home: home)
-        guard let type = try? fileManager.attributesOfItem(atPath: legacy.path)[.type] as? FileAttributeType,
-              type == .typeDirectory else { return nil }
-        return legacy
+        do {
+            _ = try fileManager.destinationOfSymbolicLink(atPath: legacy.path)
+            return .absent
+        } catch {
+            if Self.isPermission(error) { return .unreadable(error.localizedDescription) }
+        }
+        do {
+            let attributes = try fileManager.attributesOfItem(atPath: legacy.path)
+            guard (attributes[.type] as? FileAttributeType) == .typeDirectory else { return .absent }
+            return .folder(legacy)
+        } catch {
+            if Self.isMissing(error) { return .absent }
+            return .unreadable(error.localizedDescription)
+        }
+    }
+
+    private static func isMissing(_ error: Error) -> Bool {
+        let ns = error as NSError
+        if ns.domain == NSCocoaErrorDomain && ns.code == NSFileReadNoSuchFileError { return true }
+        return ns.domain == NSPOSIXErrorDomain && ns.code == Int(POSIXError.ENOENT.rawValue)
+    }
+
+    private static func isPermission(_ error: Error) -> Bool {
+        let ns = error as NSError
+        if ns.domain == NSCocoaErrorDomain && ns.code == NSFileReadNoPermissionError { return true }
+        return ns.domain == NSPOSIXErrorDomain && ns.code == Int(POSIXError.EACCES.rawValue)
     }
 
     /// Appends the old file's complete lines, then deletes it. A trailing unterminated fragment is an unfinished
     /// record that the sink would discard itself, so it isn't carried over.
-    /// The source goes through `.merging` (append in progress) and `.migrated` (appended, only needs deleting). A crash
-    /// leaves a name the next run recognizes: a `.merging` file is merged again, which can repeat a line that was
-    /// already appended, and a `.migrated` file is just deleted.
+    /// The source goes through `.merging` (append in progress) and `.migrated` (appended, only needs deleting).
+    /// A sibling `.merge-mark` records the destination offset and the byte count before the append, so a crash
+    /// after the append does not write those bytes again.
     private func merge(_ source: URL, into target: URL) throws {
         let values = try target.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
         guard values.isRegularFile == true, values.isSymbolicLink != true else {
@@ -95,6 +151,7 @@ public struct TelemetryFolderMigration {
             try fileManager.removeItem(at: source)
             return
         }
+        let payload = Data(incoming[incoming.startIndex...lastNewline])
         let handle = try FileHandle(forUpdating: target)
         defer { try? handle.close() }
         let size = try handle.seekToEnd()
@@ -111,16 +168,51 @@ public struct TelemetryFolderMigration {
         let merging = Self.stage(of: source) == .merging
             ? source : source.appendingPathExtension(Self.mergingExtension)
         if merging != source { try fileManager.moveItem(at: source, to: merging) }
+        let mark = merging.deletingPathExtension().appendingPathExtension(Self.markExtension)
+        let offset = try resumeOffset(mark: mark, end: size, length: payload.count)
+        if try contains(payload, at: offset, in: handle) {
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+            try finishMerge(merging: merging, mark: mark)
+            return
+        }
+        let end = try handle.seekToEnd()
+        if end != offset { try handle.truncate(atOffset: offset) }
         do {
-            try handle.seekToEnd()
-            try handle.write(contentsOf: incoming[incoming.startIndex...lastNewline])
+            try handle.seek(toOffset: offset)
+            try handle.write(contentsOf: payload)
             try handle.synchronize()
         } catch {
-            // Undo any partial append; the file keeps a name the next run picks up again.
-            try? handle.truncate(atOffset: size)
+            try? handle.truncate(atOffset: offset)
             throw error
         }
-        // The lines are in the target now, so from here the source must never go back to a name that gets appended again.
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+        try finishMerge(merging: merging, mark: mark)
+    }
+
+    /// The mark is written before the append. A later run with the same length trusts that offset.
+    private func resumeOffset(mark: URL, end: UInt64, length: Int) throws -> UInt64 {
+        if let saved = readMark(mark), saved.length == length { return saved.offset }
+        try Data("\(end) \(length)\n".utf8).write(to: mark, options: .atomic)
+        try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: mark.path)
+        return end
+    }
+
+    private func readMark(_ mark: URL) -> (offset: UInt64, length: Int)? {
+        guard let text = try? String(contentsOf: mark, encoding: .utf8) else { return nil }
+        let parts = text.split(whereSeparator: { $0 == " " || $0 == "\n" })
+        guard parts.count == 2, let offset = UInt64(parts[0]), let length = Int(parts[1]), length >= 0 else { return nil }
+        return (offset, length)
+    }
+
+    private func contains(_ payload: Data, at offset: UInt64, in handle: FileHandle) throws -> Bool {
+        let end = try handle.seekToEnd()
+        guard end >= offset + UInt64(payload.count) else { return false }
+        try handle.seek(toOffset: offset)
+        return try handle.read(upToCount: payload.count) == payload
+    }
+
+    /// The lines are in the target now, so from here the source must never go back to a name that gets appended again.
+    private func finishMerge(merging: URL, mark: URL) throws {
         let base = merging.deletingPathExtension()
         let migrated = base.appendingPathExtension(Self.migratedExtension)
         do {
@@ -132,9 +224,11 @@ public struct TelemetryFolderMigration {
                 try fileManager.moveItem(at: merging, to: base.appendingPathExtension(Self.mergingDoneExtension))
                 throw error
             }
+            try? fileManager.removeItem(at: mark)
             return
         }
         try fileManager.removeItem(at: migrated)
+        try? fileManager.removeItem(at: mark)
     }
 
     private func removeLegacyFolderIfEmpty(_ legacy: URL) -> [String] {
@@ -149,6 +243,7 @@ public struct TelemetryFolderMigration {
 
     private static let mergingExtension = "merging"
     private static let migratedExtension = "migrated"
+    private static let markExtension = "merge-mark"
 
     private static let mergingDoneExtension = "merging-done"
 

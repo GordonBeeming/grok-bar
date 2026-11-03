@@ -27,15 +27,27 @@ struct ThresholdBarView: View {
                         .gesture(dragGesture(width: width) { percent in
                             warningPercent = min(percent, criticalPercent - 1)
                         })
+                        .focusable()
                         .accessibilityLabel("Warning threshold")
                         .accessibilityValue("\(Int(warningPercent)) percent")
+                        .accessibilityAdjustableAction { direction in
+                            nudgeWarning(direction == .increment ? 1 : -1)
+                        }
+                        .onKeyPress(.leftArrow) { nudgeWarning(-1); return .handled }
+                        .onKeyPress(.rightArrow) { nudgeWarning(1); return .handled }
 
                     handle(at: criticalX, color: .red)
                         .gesture(dragGesture(width: width) { percent in
                             criticalPercent = max(percent, warningPercent + 1)
                         })
+                        .focusable()
                         .accessibilityLabel("Critical threshold")
                         .accessibilityValue("\(Int(criticalPercent)) percent")
+                        .accessibilityAdjustableAction { direction in
+                            nudgeCritical(direction == .increment ? 1 : -1)
+                        }
+                        .onKeyPress(.leftArrow) { nudgeCritical(-1); return .handled }
+                        .onKeyPress(.rightArrow) { nudgeCritical(1); return .handled }
                 }
                 .coordinateSpace(name: "thresholdBar")
             }
@@ -48,6 +60,14 @@ struct ThresholdBarView: View {
             }
             .font(.caption)
         }
+    }
+
+    private func nudgeWarning(_ delta: Double) {
+        warningPercent = min(max(warningPercent + delta, 1), criticalPercent - 1)
+    }
+
+    private func nudgeCritical(_ delta: Double) {
+        criticalPercent = min(max(criticalPercent + delta, warningPercent + 1), 100)
     }
 
     private func handle(at x: CGFloat, color: Color) -> some View {

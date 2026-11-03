@@ -9,6 +9,7 @@ public struct UsageSnapshotStabilizer: Sendable {
 
     private struct PendingRegression: Sendable {
         var limits: [UsageLimit]
+        var regressedIDs: Set<String>
         var confirmations: Int
     }
 
@@ -50,7 +51,10 @@ public struct UsageSnapshotStabilizer: Sendable {
             return .accepted(candidate)
         }
 
-        if var pendingRegression, hasSameWindows(candidate, as: pendingRegression.limits) {
+        let regressedIDs = regressedIDs(candidate, comparedWith: trustedLimits)
+        if var pendingRegression,
+           pendingRegression.regressedIDs == regressedIDs,
+           hasSameWindows(candidate, as: pendingRegression.limits) {
             pendingRegression.limits = candidate
             pendingRegression.confirmations += 1
 
@@ -67,7 +71,7 @@ public struct UsageSnapshotStabilizer: Sendable {
             )
         }
 
-        pendingRegression = PendingRegression(limits: candidate, confirmations: 1)
+        pendingRegression = PendingRegression(limits: candidate, regressedIDs: regressedIDs, confirmations: 1)
         return .held(confirmations: 1, required: requiredConsecutiveSamples)
     }
 
@@ -75,17 +79,28 @@ public struct UsageSnapshotStabilizer: Sendable {
         _ candidate: [UsageLimit],
         comparedWith trusted: [UsageLimit]
     ) -> Bool {
+        !regressedIDs(candidate, comparedWith: trusted).isEmpty
+    }
+
+    /// Limits whose drop is large enough to quarantine. A later sample only continues the count when this set is unchanged.
+    private func regressedIDs(
+        _ candidate: [UsageLimit],
+        comparedWith trusted: [UsageLimit]
+    ) -> Set<String> {
         let trustedByID = Dictionary(
             trusted.map { ($0.id, $0) },
             uniquingKeysWith: { _, latest in latest }
         )
-
-        return candidate.contains { current in
-            guard let previous = trustedByID[current.id] else { return false }
+        var ids = Set<String>()
+        for current in candidate {
+            guard let previous = trustedByID[current.id] else { continue }
             let drop = previous.percent - current.percent
-            guard drop >= suspiciousDropPercent else { return false }
-            return !hasConvincingResetAdvance(from: previous, to: current)
+            guard drop >= suspiciousDropPercent else { continue }
+            if !hasConvincingResetAdvance(from: previous, to: current) {
+                ids.insert(current.id)
+            }
         }
+        return ids
     }
 
     private func hasConvincingResetAdvance(from previous: UsageLimit, to current: UsageLimit) -> Bool {

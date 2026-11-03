@@ -32,6 +32,12 @@ struct GrokExecutableLocator: Sendable {
             home.appending(path: ".nvm/current/bin/grok")
         ]
 
+        // nvm only creates `current` when a shell has linked it. The installed binaries live under versions/node.
+        candidates += executables(
+            beneath: home.appending(path: ".nvm/versions/node"),
+            suffix: "bin/grok"
+        )
+
         candidates += executables(
             beneath: home.appending(path: ".local/share/fnm/node-versions"),
             suffix: "installation/bin/grok"

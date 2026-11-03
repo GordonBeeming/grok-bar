@@ -76,7 +76,7 @@ enum BarEvents {
             return usageDidReset(from: before.utilization, to: limit.utilization)
         }
         let jump = new - old
-        if before.utilization == 0 && limit.utilization == 0 { return false }
+        // Half a window, in seconds: minutes * 60 / 2. A window that rolls while usage stays at 0% is still a reset.
         if let minutes = limit.windowMinutes, jump >= Double(minutes) * 30 { return true }
         if limit.windowMinutes == nil, jump >= resetJumpTolerance { return true }
         guard jump > resetJumpTolerance else { return false }

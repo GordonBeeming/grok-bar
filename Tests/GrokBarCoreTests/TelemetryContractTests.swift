@@ -3,6 +3,20 @@ import XCTest
 @testable import GrokBarCore
 
 final class TelemetryContractTests: XCTestCase {
+    func testZeroUsageWindowRolloverIsStillAReset() {
+        let before = ObservedLimit(name: "Weekly", windowMinutes: 10_080, utilization: 0, resetsAt: 1_000_000)
+        let rolled = BarLimit(
+            id: "credits:10080", name: "Weekly", windowMinutes: 10_080,
+            utilization: 0, resetsAt: 1_000_000 + Double(10_080 * 60)
+        )
+        let jitter = BarLimit(
+            id: "credits:10080", name: "Weekly", windowMinutes: 10_080,
+            utilization: 0, resetsAt: 1_000_060
+        )
+        XCTAssertTrue(BarEvents.didReset(from: before, to: rolled, now: Date(timeIntervalSince1970: 1_000_000)))
+        XCTAssertFalse(BarEvents.didReset(from: before, to: jitter, now: Date(timeIntervalSince1970: 1_000_000)))
+    }
+
     func testURLAcceptsASubsetAndRejectsABadInterval() throws {
         let change = try TelemetryURLCommand.parse(XCTUnwrap(URL(string: "grokbar://telemetry?enabled=1&interval=7&retention=0&folder=%2FUsers%2Fme%2FTelemetry&utm=x")))
         XCTAssertEqual(change, .telemetry(TelemetrySettingsChange(enabled: true, intervalMinutes: 7, retentionDays: 0, directory: "/Users/me/Telemetry")))

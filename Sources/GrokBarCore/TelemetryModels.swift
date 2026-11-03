@@ -56,10 +56,11 @@ public final class TelemetryActivity: Sendable {
 
     public func stop() { enabled.withLock { $0 = false } }
 
-    public func whileEnabled(_ body: () throws -> Void) throws {
+    /// Holds the enabled flag until `body` returns, so `stop()` cannot finish while a record is still being written.
+    public func whileEnabled<T>(_ body: () throws -> T) throws -> T {
         try enabled.withLock { enabled in
             guard enabled else { throw CancellationError() }
-            try body()
+            return try body()
         }
     }
 

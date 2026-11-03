@@ -55,6 +55,10 @@ enum MenuBarIconRenderer {
             return true
         }
         image.isTemplate = isTemplate
+        var description = ["Grok usage"]
+        if let percent { description.append("\(percent) percent") }
+        if flameSymbol != nil { description.append("ahead of pace") }
+        image.accessibilityDescription = description.joined(separator: ", ")
         return image
     }
 
@@ -105,14 +109,25 @@ struct MenuBarLabelView: View {
             in: model.limits,
             selectedID: settings.menuBarPercentageSelection.limitID
         )
+        let percent = displayedLimit.map { Int(settings.usageDisplayMode.displayPercent(usedPercent: $0.percent).rounded()) }
         Image(nsImage: MenuBarIconRenderer.image(
-            percent: displayedLimit.map { Int(settings.usageDisplayMode.displayPercent(usedPercent: $0.percent).rounded()) },
+            percent: percent,
             severity: displayedLimit.map { settings.thresholds.resolve(for: $0) } ?? .normal,
             flameColor: flameColor
         ))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Grok usage")
+        .accessibilityValue(menuBarValue(percent: percent))
         .onReceive(NotificationCenter.default.publisher(for: .grokBarOpenSettings)) { _ in
             openSettings()
         }
+    }
+
+    private func menuBarValue(percent: Int?) -> String {
+        var parts: [String] = []
+        if let percent { parts.append("\(percent) percent") }
+        if flameColor != nil { parts.append("ahead of pace") }
+        return parts.joined(separator: ", ")
     }
 
     private var flameColor: NSColor? {

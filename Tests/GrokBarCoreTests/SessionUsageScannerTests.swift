@@ -30,6 +30,40 @@ final class SessionUsageScannerTests: XCTestCase {
         XCTAssertEqual(state.totals["grok-4.7"], counts)
     }
 
+    func testOneBadUsageFileDoesNotBackfillWhenItBecomesReadable() throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: "grokbar-sessions-\(UUID())", directoryHint: .isDirectory)
+        let good = home.appending(path: "sessions/ok/session", directoryHint: .isDirectory)
+        let bad = home.appending(path: "sessions/bad/session", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: good, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: bad, withIntermediateDirectories: true)
+        try write(good.appending(path: "usage.json"), input: 10, output: 2, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 12)
+        try Data("{".utf8).write(to: bad.appending(path: "usage.json"))
+
+        let scanner = SessionUsageScanner(grokHome: home)
+        var state = try scanner.baseline(now: Date())
+        XCTAssertTrue(state.totals.isEmpty)
+        XCTAssertEqual(state.unreadAtBaseline.count, 1)
+
+        try write(bad.appending(path: "usage.json"), input: 100, output: 20, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 120)
+        XCTAssertEqual(try scanner.scan(&state).count, 0)
+        XCTAssertTrue(state.totals.isEmpty)
+        XCTAssertTrue(state.unreadAtBaseline.isEmpty)
+
+        try write(bad.appending(path: "usage.json"), input: 110, output: 25, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 135)
+        _ = try scanner.scan(&state)
+        let counts = try XCTUnwrap(state.totals["grok-4.7"])
+        XCTAssertEqual(counts.input, 10)
+        XCTAssertEqual(counts.output, 5)
+    }
+
+    func testSessionsPathThatIsAFileFailsTheScan() throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: "grokbar-sessions-\(UUID())", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try Data("not a directory".utf8).write(to: home.appending(path: "sessions"))
+        let scanner = SessionUsageScanner(grokHome: home)
+        XCTAssertThrowsError(try scanner.baseline(now: Date()))
+    }
+
     func testNewFileAfterBaselineIsCounted() throws {
         let home = FileManager.default.temporaryDirectory.appending(path: "grokbar-sessions-\(UUID())", directoryHint: .isDirectory)
         let scanner = SessionUsageScanner(grokHome: home)

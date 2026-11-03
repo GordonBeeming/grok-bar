@@ -256,19 +256,21 @@ final class UsageViewModel {
         if needsTelemetryRefresh { await refresh() }
         guard !Task.isCancelled, generation == telemetryGeneration else { return }
         let isFresh = snapshotObservedAt.map { Date().timeIntervalSince($0) <= 120 } ?? false
-        let snapshot = isFresh ? latestSnapshot : nil
+        // `limits` is what the stabilizer accepted. A held reading stays out of the file.
+        let trustedLimits = isFresh ? limits : nil
+        let prepaid = isFresh ? latestSnapshot?.prepaidUSD : nil
         do {
             let capturedAt = Date()
             try await recorder.recordSample(
-                limits: snapshot?.limits,
-                prepaidUSD: snapshot?.prepaidUSD,
+                limits: trustedLimits,
+                prepaidUSD: prepaid,
                 at: capturedAt
             )
             guard generation == telemetryGeneration else { return }
             lastTelemetryWrite = capturedAt
             var warnings = await recorder.exportWarnings()
             guard generation == telemetryGeneration else { return }
-            if snapshot == nil { warnings.append("Grok usage unavailable; recorded local tokens only") }
+            if trustedLimits == nil { warnings.append("Grok usage unavailable; recorded local tokens only") }
             telemetryError = warnings.isEmpty ? nil : warnings.joined(separator: "\n")
         } catch {
             reportTelemetryFailure(error, generation: generation)

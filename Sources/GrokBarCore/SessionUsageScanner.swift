@@ -24,6 +24,40 @@ public struct SessionScanState: Codable, Sendable, Equatable {
     var cursors: [String: [String: RawTotals]]
     public internal(set) var totals: [String: TokenTypeCounts]
     public let countingSince: Date
+    /// Paths that existed when counting started but could not be read. The first good read sets a cursor and counts nothing.
+    var unreadAtBaseline: Set<String>
+
+    init(
+        cursors: [String: [String: RawTotals]],
+        totals: [String: TokenTypeCounts],
+        countingSince: Date,
+        unreadAtBaseline: Set<String> = []
+    ) {
+        self.cursors = cursors
+        self.totals = totals
+        self.countingSince = countingSince
+        self.unreadAtBaseline = unreadAtBaseline
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cursors, totals, countingSince, unreadAtBaseline
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        cursors = try container.decode([String: [String: RawTotals]].self, forKey: .cursors)
+        totals = try container.decode([String: TokenTypeCounts].self, forKey: .totals)
+        countingSince = try container.decode(Date.self, forKey: .countingSince)
+        unreadAtBaseline = try container.decodeIfPresent(Set<String>.self, forKey: .unreadAtBaseline) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(cursors, forKey: .cursors)
+        try container.encode(totals, forKey: .totals)
+        try container.encode(countingSince, forKey: .countingSince)
+        try container.encode(unreadAtBaseline, forKey: .unreadAtBaseline)
+    }
 }
 
 /// Counts tokens from Grok session `usage.json` files under `GROK_HOME` (default `~/.grok`).
@@ -44,7 +78,11 @@ public struct SessionUsageScanner: Sendable {
     public func baseline(now: Date) throws -> SessionScanState {
         var state = SessionScanState(cursors: [:], totals: [:], countingSince: now)
         for url in try usageFiles() {
-            state.cursors[url.path] = try Self.rawTotals(in: url)
+            do {
+                state.cursors[url.path] = try Self.rawTotals(in: url)
+            } catch {
+                state.unreadAtBaseline.insert(url.path)
+            }
         }
         return state
     }
@@ -56,6 +94,10 @@ public struct SessionUsageScanner: Sendable {
             do { current = try Self.rawTotals(in: url) }
             catch {
                 failures.append(ScanFailure(file: url.lastPathComponent, message: error.localizedDescription))
+                continue
+            }
+            if state.unreadAtBaseline.remove(url.path) != nil {
+                state.cursors[url.path] = current
                 continue
             }
             let previous = state.cursors[url.path] ?? [:]
@@ -70,19 +112,32 @@ public struct SessionUsageScanner: Sendable {
     }
 
     private func usageFiles() throws -> [URL] {
-        guard FileManager.default.fileExists(atPath: root.path) else { return [] }
-        let enumerator = FileManager.default.enumerator(
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory) else { return [] }
+        guard isDirectory.boolValue else {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: root.path])
+        }
+        var enumerationError: Error?
+        guard let enumerator = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        )
+            options: [.skipsHiddenFiles],
+            errorHandler: { _, error in
+                enumerationError = error
+                return false
+            }
+        ) else {
+            throw CocoaError(.fileReadUnknown, userInfo: [NSFilePathErrorKey: root.path])
+        }
         var files: [URL] = []
-        while let url = enumerator?.nextObject() as? URL {
+        while let url = enumerator.nextObject() as? URL {
+            if let enumerationError { throw enumerationError }
             guard url.lastPathComponent == "usage.json" else { continue }
             let values = try url.resourceValues(forKeys: [.isRegularFileKey])
             guard values.isRegularFile == true else { continue }
             files.append(url)
         }
+        if let enumerationError { throw enumerationError }
         return files.sorted { $0.path < $1.path }
     }
 

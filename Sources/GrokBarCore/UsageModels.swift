@@ -276,7 +276,12 @@ public enum UsageLimitMapper {
 
     private static func creditID(period: BillingPeriod) -> String {
         let bounds = window(period)
-        if let minutes = bounds.minutes { return "credits:\(minutes)" }
+        if let minutes = bounds.minutes {
+            // A calendar month is 28 to 31 days, so the minute count is not a stable identity.
+            // The real length stays on windowDurationMinutes.
+            if (20 * 24 * 60)...(45 * 24 * 60) ~= minutes { return "credits:monthly" }
+            return "credits:\(minutes)"
+        }
         if period.type?.contains("WEEKLY") == true { return "credits:weekly" }
         if period.type?.contains("MONTHLY") == true { return "credits:monthly" }
         return "credits"

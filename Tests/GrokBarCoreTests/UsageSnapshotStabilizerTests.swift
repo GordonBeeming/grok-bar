@@ -64,6 +64,18 @@ final class UsageSnapshotStabilizerTests: XCTestCase {
         XCTAssertEqual(stabilizer.evaluate(duplicateRegression), .held(confirmations: 2, required: 3))
     }
 
+    func testAlternatingRegressionsDoNotShareAConfirmationCount() {
+        var stabilizer = UsageSnapshotStabilizer()
+        let trusted = limits(primary: 84, secondary: 13)
+        let primaryDrop = limits(primary: 5, secondary: 13, resetShift: 10)
+        let secondaryDrop = limits(primary: 84, secondary: 1, resetShift: 10)
+
+        XCTAssertEqual(stabilizer.evaluate(trusted), .accepted(trusted))
+        XCTAssertEqual(stabilizer.evaluate(primaryDrop), .held(confirmations: 1, required: 3))
+        XCTAssertEqual(stabilizer.evaluate(secondaryDrop), .held(confirmations: 1, required: 3))
+        XCTAssertEqual(stabilizer.evaluate(primaryDrop), .held(confirmations: 1, required: 3))
+    }
+
     func testPlanChangeAcceptsNewUsageImmediately() {
         var stabilizer = UsageSnapshotStabilizer()
         let exhausted = limits(primary: 100, secondary: 17)
