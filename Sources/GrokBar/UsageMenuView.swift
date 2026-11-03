@@ -79,12 +79,6 @@ struct UsageMenuView: View {
             Text(model.lastUpdated.map { ResetFormatting.updatedAgoString(since: $0, now: now) } ?? "Never updated")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if let prepaid = model.prepaidUSD {
-                Text(prepaid, format: .currency(code: "USD"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .help("Prepaid balance")
-            }
         }
     }
 

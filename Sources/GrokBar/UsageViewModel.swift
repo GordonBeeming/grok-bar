@@ -8,7 +8,6 @@ import OSLog
 final class UsageViewModel {
     private(set) var limits: [UsageLimit] = []
     private(set) var planType: String?
-    private(set) var prepaidUSD: Double?
     private(set) var lastUpdated: Date?
     private(set) var lastError: String?
     private(set) var isRefreshing = false
@@ -135,7 +134,6 @@ final class UsageViewModel {
             latestSnapshot = snapshot
             snapshotObservedAt = Date()
             planType = snapshot.planType
-            prepaidUSD = snapshot.prepaidUSD
             lastUpdated = Date()
             lastError = nil
 
